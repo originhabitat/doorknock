@@ -171,6 +171,10 @@ function uid(){ return Date.now().toString(36) + Math.random().toString(36).slic
 function load(key, fallback){ try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } }
 function save(key, val){ localStorage.setItem(key, JSON.stringify(val)); }
 function pad2(n){ return String(n).padStart(2,'0'); }
+function fmtTs(iso){
+  if (!iso) return '';
+  return new Date(iso).toLocaleString('en-SG', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
+}
 
 let entries = load(LS_ENTRIES, null);
 let blockNotes = load(LS_BLOCKNOTES, null);
@@ -198,6 +202,9 @@ let query = '';
 let sheetUnit = null;    // { unit } currently open in the quick sheet, or null
 let sheetDraft = null;   // working copy of the entry being edited in the sheet
 let showLayoutForm = false;
+let newBlockDraft = null;     // { } while the "new block" inline form is open, else null
+let resetConfirming = false;  // custom confirm state — window.confirm() is a no-op in iOS home-screen apps
+let sheetConfirmDelete = false;
 
 /* ---------- toast ---------- */
 function toast(msg){
@@ -222,15 +229,15 @@ function download(filename, content, mime){
 }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function exportCsv(){
-  const cols = ['block','unit','status','status_label','name','phone','notes','keep_contact','revisit','timestamp'];
+  const cols = ['block','unit','status','status_label','name','phone','notes','keep_contact','revisit','logged_at','updated_at'];
   const lines = [cols.join(',')];
   for (const e of entries) {
     lines.push([e.block, e.unit, e.status, STATUS[e.status]?.label || '', e.name, e.phone, e.notes,
-      e.keep_contact ? 'yes' : '', e.revisit ? 'yes' : '', e.ts].map(csvEscape).join(','));
+      e.keep_contact ? 'yes' : '', e.revisit ? 'yes' : '', e.ts, e.updated_ts || ''].map(csvEscape).join(','));
   }
   for (const [block, note] of Object.entries(blockNotes)) {
     if (!note) continue;
-    lines.push([block, '(BLOCK NOTE)', '', '', '', '', note, '', '', ''].map(csvEscape).join(','));
+    lines.push([block, '(BLOCK NOTE)', '', '', '', '', note, '', '', '', ''].map(csvEscape).join(','));
   }
   download(`doorlog-${todayStr()}.csv`, lines.join('\n'), 'text/csv');
   toast('CSV exported');
@@ -239,31 +246,42 @@ function exportJson(){
   download(`doorlog-${todayStr()}.json`, JSON.stringify({ entries, blockNotes, layouts }, null, 2), 'application/json');
   toast('JSON exported');
 }
-function importJsonFile(file){
-  const reader = new FileReader();
-  reader.onload = () => {
-    try {
-      const data = JSON.parse(reader.result);
-      if (!Array.isArray(data.entries)) throw new Error('bad file');
-      const existingIds = new Set(entries.map(e => e.id));
-      let added = 0;
-      for (const e of data.entries) if (!existingIds.has(e.id)) { entries.push(e); added++; }
-      blockNotes = { ...blockNotes, ...(data.blockNotes || {}) };
-      layouts = { ...layouts, ...(data.layouts || {}) };
-      save(LS_ENTRIES, entries); save(LS_BLOCKNOTES, blockNotes); save(LS_LAYOUTS, layouts);
-      toast(`Imported ${added} new entr${added === 1 ? 'y' : 'ies'}`);
-      render();
-    } catch { toast('Could not read that file'); }
-  };
-  reader.readAsText(file);
+function readJsonFile(file){
+  return new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = () => { try { resolve(JSON.parse(reader.result)); } catch { resolve(null); } };
+    reader.onerror = () => resolve(null);
+    reader.readAsText(file);
+  });
+}
+// Stitches any number of exported JSON files together. Entries are de-duplicated
+// by their id, so re-importing the same export twice is safe. Note: entries logged
+// independently on two different devices for the SAME door will have different ids
+// and so will both be kept — review duplicates in List view if that happens.
+async function importJsonFiles(fileList){
+  const existingIds = new Set(entries.map(e => e.id));
+  let added = 0, unreadable = 0;
+  for (const file of fileList) {
+    const data = await readJsonFile(file);
+    if (!data || !Array.isArray(data.entries)) { unreadable++; continue; }
+    for (const e of data.entries) {
+      if (!existingIds.has(e.id)) { entries.push(e); existingIds.add(e.id); added++; }
+    }
+    blockNotes = { ...blockNotes, ...(data.blockNotes || {}) };
+    layouts = { ...layouts, ...(data.layouts || {}) };
+  }
+  save(LS_ENTRIES, entries); save(LS_BLOCKNOTES, blockNotes); save(LS_LAYOUTS, layouts);
+  toast(`Imported ${added} new entr${added === 1 ? 'y' : 'ies'}${unreadable ? `, ${unreadable} file(s) unreadable` : ''}`);
+  render();
 }
 
 /* ---------- CRUD ---------- */
 function findEntry(block, unit){ return entries.find(e => e.block === block && e.unit === unit); }
 function upsertEntry(block, unit, data){
+  const now = new Date().toISOString();
   const i = entries.findIndex(e => e.block === block && e.unit === unit);
-  if (i >= 0) entries[i] = { ...entries[i], ...data };
-  else entries.push({ id: uid(), block, unit, ts: new Date().toISOString(),
+  if (i >= 0) entries[i] = { ...entries[i], ...data, updated_ts: now };
+  else entries.push({ id: uid(), block, unit, ts: now, updated_ts: now,
     status:'', name:'', phone:'', notes:'', keep_contact:false, revisit:false, ...data });
   save(LS_ENTRIES, entries);
 }
@@ -271,10 +289,15 @@ function deleteEntryByUnit(block, unit){
   entries = entries.filter(e => !(e.block === block && e.unit === unit));
   save(LS_ENTRIES, entries);
 }
+// Union of every block we know about — from logged doors, saved layouts, AND the
+// blockNotes registry (a brand-new block with neither entries nor a layout yet
+// still gets a blockNotes key so it shows up in the dropdown immediately).
 function blocksList(){
   const fromEntries = entries.map(e => e.block);
   const fromLayouts = Object.keys(layouts);
-  return [...new Set([...fromEntries, ...fromLayouts])].sort((a,b) => b.localeCompare(a, undefined, {numeric:true}));
+  const fromNotes = Object.keys(blockNotes);
+  return [...new Set([...fromEntries, ...fromLayouts, ...fromNotes])]
+    .sort((a,b) => b.localeCompare(a, undefined, {numeric:true}));
 }
 
 /* ---------- grid computation ---------- */
@@ -327,8 +350,9 @@ function render(){
       </div>
       <div class="blocknote">
         <input type="text" id="blockNoteInput" placeholder="Block note — e.g. stopped at lvl 9, start lvl 8"
-          value="${escAttr(blockNotes[currentBlock] || '')}" />
+          value="${escAttr(blockNotes[currentBlock] || '')}" ${newBlockDraft ? 'disabled' : ''} />
       </div>
+      ${newBlockDraft ? newBlockFormHtml() : ''}
       ${showLayoutForm ? layoutFormHtml(layout) : ''}
     </div>
 
@@ -342,20 +366,43 @@ function render(){
     <div class="tabs">
       <button class="${view==='table'?'on':''}" id="tabTable">Table</button>
       <button class="${view==='list'?'on':''}" id="tabList">List</button>
+      <button class="${view==='summary'?'on':''}" id="tabSummary">Summary</button>
     </div>
 
-    ${view === 'table' ? tableViewHtml(currentBlock) : listViewHtml(currentBlock)}
+    ${view === 'table' ? tableViewHtml(currentBlock) : view === 'list' ? listViewHtml(currentBlock) : summaryViewHtml()}
   `;
 
   document.getElementById('navbar').innerHTML = `
     <button class="ghost" id="exportCsvBtn">Export CSV</button>
     <button class="ghost" id="exportJsonBtn">Export JSON</button>
     <button class="ghost" id="importBtn">Import</button>
-    <input type="file" id="importFile" accept="application/json" />
+    <button class="danger" id="resetBtn">Clear data</button>
+    <input type="file" id="importFile" accept="application/json" multiple />
   `;
 
   wireEvents();
   renderSheet();
+  renderResetConfirm();
+}
+
+function newBlockFormHtml(){
+  return `
+    <div class="card setupform" id="newBlockForm" style="margin-top:8px;">
+      <label>Block number</label>
+      <input type="text" id="nb_block" placeholder="e.g. 742" autofocus />
+      <label>Unit numbers per floor (comma separated) — optional</label>
+      <input type="text" id="nb_suffixes" placeholder="e.g. 49,51,53,55,57,59" />
+      <div class="grid2">
+        <div><label>From floor</label><input type="number" id="nb_start" placeholder="1" /></div>
+        <div><label>To floor</label><input type="number" id="nb_end" placeholder="16" /></div>
+      </div>
+      <p class="sub">Leave the unit numbers/floors blank to just start the block — you can set the layout any time via "Set layout".</p>
+      <div class="btnrow">
+        <button class="primary" id="nb_create">Create block</button>
+        <button class="ghost" id="nb_cancel">Cancel</button>
+      </div>
+    </div>
+  `;
 }
 
 function layoutFormHtml(layout){
@@ -410,6 +457,41 @@ function tableViewHtml(block){
   `;
 }
 
+function summaryViewHtml(){
+  const byTs = (a,b) => (b.updated_ts || b.ts || '').localeCompare(a.updated_ts || a.ts || '');
+  const contacts = entries.filter(e => e.status === 'contact').sort(byTs);
+  const keepers  = entries.filter(e => e.keep_contact).sort(byTs);
+  const revisits = entries.filter(e => e.revisit).sort(byTs);
+  const section = (title, list) => `
+    <h2>${escHtml(title)} (${list.length})</h2>
+    ${list.length === 0 ? '<p class="sub">None yet.</p>' : list.map(summaryEntryHtml).join('')}
+  `;
+  return `
+    <p class="sub">Across all blocks, most recently logged first.</p>
+    ${section('Contacts captured', contacts)}
+    ${section('Keep in contact', keepers)}
+    ${section('Flagged for revisit', revisits)}
+  `;
+}
+function summaryEntryHtml(e){
+  const st = e.status ? (STATUS[e.status] || { label: e.status, cls:'' }) : { label:'—', cls:'' };
+  const badgeCls = st.cls==='spoke'||st.cls==='contact' ? 'good' : st.cls==='rental' ? 'blue' : st.cls==='busy'||st.cls==='no_visit' ? 'warn' : '';
+  return `
+    <div class="entry" data-block="${escAttr(e.block)}" data-unit="${escAttr(e.unit)}">
+      <div class="row">
+        <span class="unit mono">Blk ${escHtml(e.block)} · ${escHtml(e.unit)}</span>
+        <span class="badge ${badgeCls}">${escHtml(st.label)}</span>
+      </div>
+      ${e.name ? `<div class="name">${escHtml(e.name)}${e.phone ? ' · ' + escHtml(e.phone) : ''}</div>` : (e.phone ? `<div class="name">${escHtml(e.phone)}</div>` : '')}
+      ${e.notes ? `<div class="notes">${escHtml(e.notes)}</div>` : ''}
+      <div class="meta">
+        <span class="sub">${fmtTs(e.updated_ts || e.ts)}</span>
+        <span class="actions"><button class="ghost openSummaryBtn">Open</button></span>
+      </div>
+    </div>
+  `;
+}
+
 function listViewHtml(block){
   const visible = entries
     .filter(e => e.block === block)
@@ -440,7 +522,8 @@ function entryHtml(e){
       <div class="meta">
         <span>
           ${e.keep_contact ? '<span class="badge good">keep in contact</span> ' : ''}
-          ${e.revisit ? '<span class="badge warn">revisit</span>' : ''}
+          ${e.revisit ? '<span class="badge warn">revisit</span> ' : ''}
+          <span class="sub">${fmtTs(e.ts)}</span>
         </span>
         <span class="actions"><button class="ghost openBtn">Open</button></span>
       </div>
@@ -456,21 +539,26 @@ function openSheet(unit){
   const existing = findEntry(currentBlock, unit);
   sheetUnit = unit;
   sheetDraft = existing ? { ...existing } : { status:'', name:'', phone:'', notes:'', keep_contact:false, revisit:false };
+  sheetConfirmDelete = false;
   renderSheet();
 }
-function closeSheet(){ sheetUnit = null; sheetDraft = null; renderSheet(); }
+function closeSheet(){ sheetUnit = null; sheetDraft = null; sheetConfirmDelete = false; renderSheet(); }
 
 function renderSheet(){
   const layer = document.getElementById('sheetLayer');
-  if (!sheetUnit) { layer.innerHTML = ''; return; }
+  if (!sheetUnit) { if (!resetConfirming) layer.innerHTML = ''; return; }
   const d = sheetDraft;
-  const exists = !!findEntry(currentBlock, sheetUnit);
+  const existingEntry = findEntry(currentBlock, sheetUnit);
+  const exists = !!existingEntry;
+  const tsLine = exists
+    ? `Logged ${fmtTs(existingEntry.ts)}${existingEntry.updated_ts && existingEntry.updated_ts !== existingEntry.ts ? ' · edited ' + fmtTs(existingEntry.updated_ts) : ''}`
+    : '';
   layer.innerHTML = `
     <div class="backdrop" id="sheetBackdrop"></div>
     <div class="sheet">
       <div class="sheet-handle"></div>
       <h3>Unit ${escHtml(sheetUnit)}</h3>
-      <p class="sub">Block ${escHtml(currentBlock)}${exists ? ' · editing existing log' : ''}</p>
+      <p class="sub">Block ${escHtml(currentBlock)}${tsLine ? ' · ' + tsLine : ''}</p>
 
       <div class="quickrow">
         <button class="quick-nothome" id="qNotHome">Not home</button>
@@ -496,7 +584,7 @@ function renderSheet(){
 
       <div class="btnrow">
         <button class="primary" id="s_save" style="flex:1;">Save</button>
-        ${exists ? '<button class="danger" id="s_delete">Delete</button>' : ''}
+        ${exists ? `<button class="danger" id="s_delete">${sheetConfirmDelete ? 'Tap again to delete' : 'Delete'}</button>` : ''}
         <button class="ghost" id="s_cancel">Cancel</button>
       </div>
     </div>
@@ -524,7 +612,7 @@ function renderSheet(){
   $('flagRevisit').addEventListener('click', () => { d.revisit = !d.revisit; renderSheet(); });
 
   $('s_save').addEventListener('click', () => {
-    const status = d.status || (exists ? findEntry(currentBlock, sheetUnit).status : '');
+    const status = d.status || (exists ? existingEntry.status : '');
     upsertEntry(currentBlock, sheetUnit, {
       status, name: $('s_name').value.trim(), phone: $('s_phone').value.trim(), notes: $('s_notes').value.trim(),
       keep_contact: d.keep_contact, revisit: d.revisit,
@@ -532,10 +620,42 @@ function renderSheet(){
     toast('Saved');
     closeSheet(); render();
   });
+  // Two-tap delete instead of window.confirm() — confirm() is a silent no-op in
+  // iOS home-screen web apps, which was also the root cause of "New block" not working.
   $('s_delete')?.addEventListener('click', () => {
-    if (confirm(`Delete the log for unit ${sheetUnit}?`)) { deleteEntryByUnit(currentBlock, sheetUnit); closeSheet(); render(); }
+    if (!sheetConfirmDelete) { sheetConfirmDelete = true; renderSheet(); return; }
+    deleteEntryByUnit(currentBlock, sheetUnit); closeSheet(); render();
   });
   $('s_cancel').addEventListener('click', closeSheet);
+}
+
+// Custom confirm overlay for clearing all data — window.confirm() is unreliable
+// (silent no-op) in iOS home-screen web apps, so we never rely on native dialogs.
+function renderResetConfirm(){
+  const layer = document.getElementById('sheetLayer');
+  if (!resetConfirming || sheetUnit) return;
+  layer.innerHTML = `
+    <div class="backdrop" id="resetBackdrop"></div>
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <h3>Clear all data?</h3>
+      <p class="sub">This clears ALL logged doors, block notes, and layouts on this device. Export a backup first if you need one — this cannot be undone.</p>
+      <div class="btnrow">
+        <button class="danger" id="rc_confirm" style="flex:1;">Yes, clear everything</button>
+        <button class="ghost" id="rc_cancel">Cancel</button>
+      </div>
+    </div>
+  `;
+  const $ = id => document.getElementById(id);
+  $('resetBackdrop').addEventListener('click', () => { resetConfirming = false; render(); });
+  $('rc_cancel').addEventListener('click', () => { resetConfirming = false; render(); });
+  $('rc_confirm').addEventListener('click', () => {
+    entries = []; blockNotes = {}; layouts = {};
+    save(LS_ENTRIES, entries); save(LS_BLOCKNOTES, blockNotes); save(LS_LAYOUTS, layouts);
+    currentBlock = ''; localStorage.removeItem(LS_LASTBLOCK);
+    resetConfirming = false;
+    toast('Cleared'); render();
+  });
 }
 
 /* ---------- events ---------- */
@@ -544,15 +664,18 @@ function wireEvents(){
 
   $('blockSelect')?.addEventListener('change', e => {
     currentBlock = e.target.value; localStorage.setItem(LS_LASTBLOCK, currentBlock);
-    showLayoutForm = false; render();
+    showLayoutForm = false; newBlockDraft = null; render();
   });
+  // Inline form instead of window.prompt() — prompt() is a silent no-op in iOS
+  // home-screen web apps, which is why "New block" previously did nothing.
   $('newBlockBtn').addEventListener('click', () => {
-    const v = prompt('New block number?');
-    if (!v || !v.trim()) return;
-    currentBlock = v.trim(); localStorage.setItem(LS_LASTBLOCK, currentBlock);
-    showLayoutForm = true; view = 'table'; render();
+    newBlockDraft = newBlockDraft ? null : {};
+    showLayoutForm = false; render();
+    document.getElementById('nb_block')?.focus();
   });
-  $('editLayoutBtn').addEventListener('click', () => { showLayoutForm = !showLayoutForm; render(); });
+  $('editLayoutBtn').addEventListener('click', () => {
+    showLayoutForm = !showLayoutForm; newBlockDraft = null; render();
+  });
 
   $('blockNoteInput')?.addEventListener('change', e => {
     blockNotes[currentBlock] = e.target.value; save(LS_BLOCKNOTES, blockNotes);
@@ -570,11 +693,40 @@ function wireEvents(){
   });
   $('lf_cancel')?.addEventListener('click', () => { showLayoutForm = false; render(); });
 
+  $('nb_create')?.addEventListener('click', () => {
+    const block = $('nb_block').value.trim();
+    if (!block) { toast('Enter a block number'); return; }
+    if (blocksList().includes(block)) { toast('That block already exists — pick it from the dropdown'); return; }
+    const suffixesRaw = $('nb_suffixes').value.trim();
+    const start = Number($('nb_start').value), end = Number($('nb_end').value);
+    if (suffixesRaw && start && end) {
+      const suffixes = suffixesRaw.split(',').map(s => s.trim()).filter(Boolean);
+      layouts[block] = { suffixes, floorStart: Math.min(start,end), floorEnd: Math.max(start,end) };
+      save(LS_LAYOUTS, layouts);
+    } else if (!(block in blockNotes)) {
+      blockNotes[block] = ''; save(LS_BLOCKNOTES, blockNotes); // registers the block so it appears in the dropdown even with no layout yet
+    }
+    currentBlock = block; localStorage.setItem(LS_LASTBLOCK, currentBlock);
+    newBlockDraft = null; view = 'table'; render();
+    toast(`Block ${block} created`);
+  });
+  $('nb_cancel')?.addEventListener('click', () => { newBlockDraft = null; render(); });
+
   $('tabTable').addEventListener('click', () => { view = 'table'; render(); });
   $('tabList').addEventListener('click', () => { view = 'list'; render(); });
+  $('tabSummary').addEventListener('click', () => { view = 'summary'; render(); });
 
   document.querySelectorAll('.cell-btn').forEach(btn => {
     btn.addEventListener('click', () => openSheet(btn.dataset.unit));
+  });
+
+  document.querySelectorAll('.openSummaryBtn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const card = btn.closest('.entry');
+      currentBlock = card.dataset.block; localStorage.setItem(LS_LASTBLOCK, currentBlock);
+      view = 'table'; render();
+      openSheet(card.dataset.unit);
+    });
   });
 
   let refocusSearch = false;
@@ -588,7 +740,16 @@ function wireEvents(){
   $('exportCsvBtn').addEventListener('click', exportCsv);
   $('exportJsonBtn').addEventListener('click', exportJson);
   $('importBtn').addEventListener('click', () => $('importFile').click());
-  $('importFile').addEventListener('change', e => { if (e.target.files[0]) importJsonFile(e.target.files[0]); e.target.value=''; });
+  $('importFile').addEventListener('change', e => {
+    if (e.target.files.length) importJsonFiles(e.target.files);
+    e.target.value = '';
+  });
+  $('resetBtn').addEventListener('click', () => {
+    if (entries.length === 0 && Object.keys(layouts).length === 0 && Object.keys(blockNotes).length === 0) {
+      toast('Already empty'); return;
+    }
+    resetConfirming = true; render();
+  });
 }
 
 render();
