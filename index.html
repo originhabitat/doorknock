@@ -107,6 +107,7 @@
   .entry .actions button{padding:5px 10px;font-size:0.78rem;}
 
   h2{font-size:0.76rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--ink-soft);margin:14px 0 6px;font-weight:700;}
+  .subhead{font-weight:700;font-size:0.85rem;margin:12px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--line);color:var(--ink);}
 
   /* ---- bottom sheet ---- */
   .backdrop{position:fixed;inset:0;background:rgba(20,33,61,0.45);z-index:40;}
@@ -175,6 +176,28 @@ function fmtTs(iso){
   if (!iso) return '';
   return new Date(iso).toLocaleString('en-SG', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
 }
+// SG-local calendar day, so a log at 11pm SGT isn't miscategorized by a UTC date slice.
+const SG_DAY_FMT = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Singapore', year:'numeric', month:'2-digit', day:'2-digit' });
+function dayKey(iso){ return iso ? SG_DAY_FMT.format(new Date(iso)) : 'unknown'; }
+function dayLabel(key){
+  if (key === 'unknown') return 'Unknown date';
+  const todayKey = SG_DAY_FMT.format(new Date());
+  const yestKey = SG_DAY_FMT.format(new Date(Date.now() - 86400000));
+  if (key === todayKey) return 'Today';
+  if (key === yestKey) return 'Yesterday';
+  const [y,m,d] = key.split('-').map(Number);
+  return new Date(Date.UTC(y, m-1, d)).toLocaleDateString('en-SG', { day:'numeric', month:'short', year:'numeric', timeZone:'UTC' });
+}
+function groupByDay(list){
+  const groups = {};
+  for (const e of list) { const k = dayKey(e.updated_ts || e.ts); (groups[k] = groups[k] || []).push(e); }
+  return Object.keys(groups).sort((a,b) => b.localeCompare(a)).map(k => ({ label: dayLabel(k), items: groups[k] }));
+}
+function groupByBlock(list){
+  const groups = {};
+  for (const e of list) (groups[e.block] = groups[e.block] || []).push(e);
+  return Object.keys(groups).sort((a,b) => b.localeCompare(a, undefined, {numeric:true})).map(k => ({ label: 'Block ' + k, items: groups[k] }));
+}
 
 let entries = load(LS_ENTRIES, null);
 let blockNotes = load(LS_BLOCKNOTES, null);
@@ -197,7 +220,8 @@ save(LS_BLOCKNOTES, blockNotes);
 save(LS_LAYOUTS, layouts);
 
 let currentBlock = localStorage.getItem(LS_LASTBLOCK) || (entries[0] ? entries[0].block : (Object.keys(layouts)[0] || ''));
-let view = 'table'; // 'table' | 'list'
+let view = 'table'; // 'table' | 'list' | 'summary'
+let summaryGroupBy = 'day'; // 'day' | 'block' | 'all'
 let query = '';
 let sheetUnit = null;    // { unit } currently open in the quick sheet, or null
 let sheetDraft = null;   // working copy of the entry being edited in the sheet
@@ -462,12 +486,29 @@ function summaryViewHtml(){
   const contacts = entries.filter(e => e.status === 'contact').sort(byTs);
   const keepers  = entries.filter(e => e.keep_contact).sort(byTs);
   const revisits = entries.filter(e => e.revisit).sort(byTs);
-  const section = (title, list) => `
-    <h2>${escHtml(title)} (${list.length})</h2>
-    ${list.length === 0 ? '<p class="sub">None yet.</p>' : list.map(summaryEntryHtml).join('')}
-  `;
+
+  const section = (title, list) => {
+    let inner;
+    if (list.length === 0) {
+      inner = '<p class="sub">None yet.</p>';
+    } else if (summaryGroupBy === 'all') {
+      inner = list.map(summaryEntryHtml).join('');
+    } else {
+      const groups = summaryGroupBy === 'day' ? groupByDay(list) : groupByBlock(list);
+      inner = groups.map(g => `
+        <div class="subhead">${escHtml(g.label)} <span class="sub">(${g.items.length})</span></div>
+        ${g.items.map(summaryEntryHtml).join('')}
+      `).join('');
+    }
+    return `<h2>${escHtml(title)} (${list.length})</h2>${inner}`;
+  };
+
   return `
-    <p class="sub">Across all blocks, most recently logged first.</p>
+    <div class="chips" id="summaryGroupChips">
+      <div class="chip ${summaryGroupBy==='day'?'on':''}" data-group="day">By day</div>
+      <div class="chip ${summaryGroupBy==='block'?'on':''}" data-group="block">By block</div>
+      <div class="chip ${summaryGroupBy==='all'?'on':''}" data-group="all">All timeline</div>
+    </div>
     ${section('Contacts captured', contacts)}
     ${section('Keep in contact', keepers)}
     ${section('Flagged for revisit', revisits)}
@@ -718,6 +759,10 @@ function wireEvents(){
 
   document.querySelectorAll('.cell-btn').forEach(btn => {
     btn.addEventListener('click', () => openSheet(btn.dataset.unit));
+  });
+
+  document.querySelectorAll('#summaryGroupChips .chip').forEach(chip => {
+    chip.addEventListener('click', () => { summaryGroupBy = chip.dataset.group; render(); });
   });
 
   document.querySelectorAll('.openSummaryBtn').forEach(btn => {
