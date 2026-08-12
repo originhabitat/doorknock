@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#14213D" />
+<title>Door Log</title>
+<style>
+  :root{
+    --ink:#14213D; --ink-soft:#4A5578; --bg:#FBFAF7; --card:#FFFFFF;
+    --line:#DEDCD3; --accent:#C0562C; --accent-soft:#FBE8DD;
+    --good:#2B6E4F; --good-soft:#E3F0E9; --warn:#9C6B00; --warn-soft:#FBF1D9;
+    --blue:#2A5C8A; --blue-soft:#E2EDF6;
+    --radius:10px; --nav-h:54px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);}
+  body{
+    font:16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing:antialiased; padding-bottom:calc(var(--nav-h) + 20px);
+  }
+  #app{max-width:680px;margin:0 auto;padding:10px 10px;}
+  h1{font-size:1.15rem;margin:6px 0 2px;letter-spacing:-0.01em;}
+  .sub{color:var(--ink-soft);font-size:0.8rem;}
+  .mono{font-variant-numeric:tabular-nums;}
+
+  .topbar{position:sticky;top:0;background:var(--bg);z-index:6;padding:8px 0 6px;border-bottom:1px solid var(--line);margin-bottom:10px;}
+  .blockrow{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
+  .blockrow select{flex:1;min-width:110px;}
+  .blocknote{margin-top:6px;}
+  .blocknote input{width:100%;}
+
+  label{display:block;font-size:0.74rem;color:var(--ink-soft);margin:8px 0 3px;text-transform:uppercase;letter-spacing:0.04em;}
+  input,select,textarea,button{
+    font:inherit;color:inherit;border-radius:8px;border:1px solid var(--line);
+    padding:10px;background:var(--card);width:100%;font-size:16px;
+  }
+  textarea{min-height:60px;resize:vertical;}
+  input:focus,select:focus,textarea:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+  button{width:auto;cursor:pointer;}
+  button.primary{background:var(--ink);border-color:var(--ink);color:#fff;font-weight:600;}
+  button.ghost{background:transparent;}
+  button.danger{color:#9C2B1F;border-color:#9C2B1F;background:transparent;}
+  button.small{padding:6px 10px;font-size:0.8rem;}
+  button:disabled{opacity:0.4;}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:12px;margin-bottom:10px;}
+  .row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 8px;}
+  .btnrow{display:flex;gap:8px;margin-top:12px;}
+
+  .tabs{display:flex;gap:6px;margin-bottom:10px;}
+  .tabs button{flex:1;background:var(--card);}
+  .tabs button.on{background:var(--ink);border-color:var(--ink);color:#fff;font-weight:600;}
+
+  .stats{display:flex;gap:14px;flex-wrap:wrap;font-size:0.8rem;color:var(--ink-soft);margin:0 0 10px;}
+  .stats b{color:var(--ink);}
+
+  .legend{display:flex;flex-wrap:wrap;gap:10px;font-size:0.72rem;color:var(--ink-soft);margin-bottom:8px;}
+  .legend span{display:inline-flex;align-items:center;gap:4px;}
+  .legend i{width:14px;height:14px;border-radius:4px;display:inline-block;border:1px solid var(--line);}
+  .legend i.st-not_home{background:var(--bg);}
+  .legend i.st-busy{background:var(--warn-soft);}
+  .legend i.st-spoke{background:var(--good-soft);}
+  .legend i.st-contact{background:var(--accent-soft);}
+  .legend i.st-rental{background:var(--blue-soft);}
+  .legend i.st-no_visit{background:var(--warn-soft);}
+
+  /* ---- grid table ---- */
+  .gridwrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--card);}
+  table.grid{border-collapse:collapse;width:100%;}
+  table.grid th, table.grid td{border:1px solid var(--line);text-align:center;padding:0;}
+  table.grid th{background:var(--bg);font-size:0.75rem;color:var(--ink-soft);font-weight:600;padding:6px 4px;position:sticky;top:0;z-index:2;}
+  table.grid th.floorcol, table.grid td.floorcol{
+    position:sticky;left:0;background:var(--bg);z-index:1;font-weight:700;font-size:0.78rem;padding:6px;min-width:34px;
+  }
+  table.grid th.floorcol{z-index:3;}
+  .cell-btn{
+    width:100%;min-width:48px;height:48px;border:none;border-radius:0;background:var(--card);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;cursor:pointer;padding:2px;
+  }
+  .cell-btn:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;}
+  .cell-btn .code{font-weight:700;font-size:0.78rem;}
+  .cell-btn .init{font-size:0.62rem;color:var(--ink-soft);max-width:44px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .cell-btn.empty .code{color:var(--line);font-weight:400;}
+  .cell-btn.st-not_home{background:var(--bg);}
+  .cell-btn.st-busy{background:var(--warn-soft);color:var(--warn);}
+  .cell-btn.st-spoke{background:var(--good-soft);color:var(--good);}
+  .cell-btn.st-contact{background:var(--accent-soft);color:var(--accent);}
+  .cell-btn.st-rental{background:var(--blue-soft);color:var(--blue);}
+  .cell-btn.st-no_visit{background:var(--warn-soft);color:var(--warn);}
+  .cell-flags{position:absolute;margin-top:-44px;margin-left:34px;font-size:0.55rem;}
+
+  .empty-block{text-align:center;color:var(--ink-soft);padding:30px 14px;}
+
+  /* ---- list view ---- */
+  .entry{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;margin-bottom:8px;}
+  .entry .unit{font-weight:700;font-size:1.02rem;}
+  .badge{font-size:0.7rem;padding:2px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-weight:600;white-space:nowrap;}
+  .badge.good{background:var(--good-soft);color:var(--good);}
+  .badge.warn{background:var(--warn-soft);color:var(--warn);}
+  .badge.blue{background:var(--blue-soft);color:var(--blue);}
+  .entry .name{font-weight:600;margin-top:2px;}
+  .entry .notes{white-space:pre-wrap;margin-top:4px;font-size:0.9rem;}
+  .entry .meta{margin-top:6px;display:flex;justify-content:space-between;align-items:center;}
+  .entry .actions{display:flex;gap:6px;}
+  .entry .actions button{padding:5px 10px;font-size:0.78rem;}
+
+  h2{font-size:0.76rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--ink-soft);margin:14px 0 6px;font-weight:700;}
+
+  /* ---- bottom sheet ---- */
+  .backdrop{position:fixed;inset:0;background:rgba(20,33,61,0.45);z-index:40;}
+  .sheet{
+    position:fixed;left:0;right:0;bottom:0;max-height:88vh;overflow-y:auto;
+    background:var(--card);border-radius:16px 16px 0 0;padding:14px 14px calc(env(safe-area-inset-bottom) + 14px);
+    z-index:41;box-shadow:0 -4px 24px rgba(0,0,0,0.18);
+  }
+  .sheet-handle{width:38px;height:4px;background:var(--line);border-radius:99px;margin:0 auto 10px;}
+  .sheet h3{margin:0;font-size:1.1rem;}
+  .quickrow{display:flex;gap:8px;margin-top:10px;}
+  .quickrow button{flex:1;padding:14px 6px;font-weight:700;font-size:0.95rem;}
+  .quick-nothome{background:var(--bg);border-color:var(--ink-soft);}
+  .quick-declined{background:var(--warn-soft);border-color:var(--warn);color:var(--warn);}
+  .divider{display:flex;align-items:center;gap:8px;color:var(--ink-soft);font-size:0.75rem;margin:14px 0 6px;text-transform:uppercase;letter-spacing:0.04em;}
+  .divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--line);}
+
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px;}
+  .chip{border:1px solid var(--line);background:var(--card);border-radius:999px;padding:8px 12px;font-size:0.85rem;cursor:pointer;user-select:none;}
+  .chip.on{background:var(--ink);border-color:var(--ink);color:#fff;}
+  .chip.flag.on{background:var(--accent);border-color:var(--accent);}
+
+  .setupform{margin-top:6px;}
+
+  .toast{
+    position:fixed;bottom:calc(var(--nav-h) + 16px);left:50%;transform:translateX(-50%);
+    background:var(--ink);color:#fff;padding:9px 16px;border-radius:8px;font-size:0.85rem;
+    z-index:50;max-width:90vw;text-align:center;
+  }
+  nav.bottom{position:fixed;bottom:0;left:0;right:0;padding-bottom:env(safe-area-inset-bottom);background:var(--card);border-top:1px solid var(--line);z-index:10;}
+  nav.bottom .inner{max-width:680px;margin:0 auto;padding:8px 10px;display:flex;gap:6px;}
+  nav.bottom button{flex:1;font-size:0.8rem;padding:9px 4px;}
+  input[type=file]{display:none;}
+  @media (prefers-reduced-motion: reduce){*{transition:none !important;animation:none !important;}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="sheetLayer"></div>
+<nav class="bottom"><div class="inner" id="navbar"></div></nav>
+
+<script>
+/* ---------- storage ---------- */
+const LS_ENTRIES = 'doorlog-entries-v2';
+const LS_BLOCKNOTES = 'doorlog-blocknotes-v2';
+const LS_LAYOUTS = 'doorlog-layouts-v2';
+const LS_LASTBLOCK = 'doorlog-lastblock-v2';
+const LS_OLD_ENTRIES = 'doorlog-entries-v1'; // one-time migration from the previous version
+
+const STATUS = {
+  not_home:{ label:'Not home',            code:'NH', cls:'not_home' },
+  busy:    { label:'Declined',            code:'D',  cls:'busy' },
+  spoke:   { label:'Spoke to occupant',   code:'S',  cls:'spoke' },
+  contact: { label:'Contact captured',    code:'C',  cls:'contact' },
+  rental:  { label:'Rental unit',         code:'R',  cls:'rental' },
+  no_visit:{ label:'No visit (info only)',code:'i',  cls:'no_visit' },
+};
+const QUICK_STATUSES = ['not_home','busy'];
+const DETAIL_STATUSES = ['spoke','contact','rental','no_visit'];
+
+function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
+function load(key, fallback){ try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } }
+function save(key, val){ localStorage.setItem(key, JSON.stringify(val)); }
+function pad2(n){ return String(n).padStart(2,'0'); }
+
+let entries = load(LS_ENTRIES, null);
+let blockNotes = load(LS_BLOCKNOTES, null);
+let layouts = load(LS_LAYOUTS, null);
+
+/* One-time migration from the previous flat-list version, if present and this is a fresh v2 load. */
+if (entries === null) {
+  const old = load(LS_OLD_ENTRIES, null);
+  entries = old || [];
+}
+
+/* This file intentionally ships with no sample data. Whatever you log lives only
+   in this browser's local storage on this device — it is never part of the file
+   itself, so nothing personal ends up in a public GitHub repo or Pages site. */
+if (entries === null) entries = [];
+if (blockNotes === null) blockNotes = {};
+if (layouts === null) layouts = {};
+save(LS_ENTRIES, entries);
+save(LS_BLOCKNOTES, blockNotes);
+save(LS_LAYOUTS, layouts);
+
+let currentBlock = localStorage.getItem(LS_LASTBLOCK) || (entries[0] ? entries[0].block : (Object.keys(layouts)[0] || ''));
+let view = 'table'; // 'table' | 'list'
+let query = '';
+let sheetUnit = null;    // { unit } currently open in the quick sheet, or null
+let sheetDraft = null;   // working copy of the entry being edited in the sheet
+let showLayoutForm = false;
+
+/* ---------- toast ---------- */
+function toast(msg){
+  const t = document.createElement('div');
+  t.className = 'toast'; t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2200);
+}
+
+/* ---------- CSV / JSON export, formula-injection safe ---------- */
+function csvEscape(v){
+  if (v == null) return '';
+  let s = String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+}
+function download(filename, content, mime){
+  const blob = new Blob([content], { type: mime });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+  URL.revokeObjectURL(a.href);
+}
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+function exportCsv(){
+  const cols = ['block','unit','status','status_label','name','phone','notes','keep_contact','revisit','timestamp'];
+  const lines = [cols.join(',')];
+  for (const e of entries) {
+    lines.push([e.block, e.unit, e.status, STATUS[e.status]?.label || '', e.name, e.phone, e.notes,
+      e.keep_contact ? 'yes' : '', e.revisit ? 'yes' : '', e.ts].map(csvEscape).join(','));
+  }
+  for (const [block, note] of Object.entries(blockNotes)) {
+    if (!note) continue;
+    lines.push([block, '(BLOCK NOTE)', '', '', '', '', note, '', '', ''].map(csvEscape).join(','));
+  }
+  download(`doorlog-${todayStr()}.csv`, lines.join('\n'), 'text/csv');
+  toast('CSV exported');
+}
+function exportJson(){
+  download(`doorlog-${todayStr()}.json`, JSON.stringify({ entries, blockNotes, layouts }, null, 2), 'application/json');
+  toast('JSON exported');
+}
+function importJsonFile(file){
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      if (!Array.isArray(data.entries)) throw new Error('bad file');
+      const existingIds = new Set(entries.map(e => e.id));
+      let added = 0;
+      for (const e of data.entries) if (!existingIds.has(e.id)) { entries.push(e); added++; }
+      blockNotes = { ...blockNotes, ...(data.blockNotes || {}) };
+      layouts = { ...layouts, ...(data.layouts || {}) };
+      save(LS_ENTRIES, entries); save(LS_BLOCKNOTES, blockNotes); save(LS_LAYOUTS, layouts);
+      toast(`Imported ${added} new entr${added === 1 ? 'y' : 'ies'}`);
+      render();
+    } catch { toast('Could not read that file'); }
+  };
+  reader.readAsText(file);
+}
+
+/* ---------- CRUD ---------- */
+function findEntry(block, unit){ return entries.find(e => e.block === block && e.unit === unit); }
+function upsertEntry(block, unit, data){
+  const i = entries.findIndex(e => e.block === block && e.unit === unit);
+  if (i >= 0) entries[i] = { ...entries[i], ...data };
+  else entries.push({ id: uid(), block, unit, ts: new Date().toISOString(),
+    status:'', name:'', phone:'', notes:'', keep_contact:false, revisit:false, ...data });
+  save(LS_ENTRIES, entries);
+}
+function deleteEntryByUnit(block, unit){
+  entries = entries.filter(e => !(e.block === block && e.unit === unit));
+  save(LS_ENTRIES, entries);
+}
+function blocksList(){
+  const fromEntries = entries.map(e => e.block);
+  const fromLayouts = Object.keys(layouts);
+  return [...new Set([...fromEntries, ...fromLayouts])].sort((a,b) => b.localeCompare(a, undefined, {numeric:true}));
+}
+
+/* ---------- grid computation ---------- */
+function computeGrid(block){
+  const layout = layouts[block];
+  let floors, suffixes;
+  if (layout) {
+    floors = [];
+    for (let f = layout.floorEnd; f >= layout.floorStart; f--) floors.push(pad2(f));
+    suffixes = layout.suffixes;
+  } else {
+    const blockEntries = entries.filter(e => e.block === block);
+    const floorSet = new Set(), suffixSet = new Set();
+    for (const e of blockEntries) {
+      const [f, s] = e.unit.split('-');
+      if (f) floorSet.add(f); if (s) suffixSet.add(s);
+    }
+    floors = [...floorSet].sort((a,b) => Number(b) - Number(a));
+    suffixes = [...suffixSet].sort();
+  }
+  return { floors, suffixes };
+}
+
+/* ---------- render ---------- */
+function render(){
+  const app = document.getElementById('app');
+  const blocks = blocksList();
+  if (!blocks.includes(currentBlock) && blocks.length) currentBlock = blocks[0];
+  const layout = layouts[currentBlock];
+
+  const stats = {
+    total: entries.filter(e => e.block === currentBlock).length,
+    spoke: entries.filter(e => e.block === currentBlock && (e.status === 'spoke' || e.status === 'contact')).length,
+    keep: entries.filter(e => e.block === currentBlock && e.keep_contact).length,
+    revisit: entries.filter(e => e.block === currentBlock && e.revisit).length,
+  };
+
+  app.innerHTML = `
+    <h1>Door Log</h1>
+    <p class="sub">Saves on this device automatically. Export before switching phones or clearing browser data.</p>
+
+    <div class="topbar">
+      <div class="blockrow">
+        <select id="blockSelect">
+          ${blocks.map(b => `<option value="${escAttr(b)}" ${b===currentBlock?'selected':''}>Block ${escHtml(b)}</option>`).join('')}
+          ${blocks.length===0 ? '<option>—</option>' : ''}
+        </select>
+        <button class="ghost small" id="newBlockBtn">+ New block</button>
+        <button class="ghost small" id="editLayoutBtn">${layout ? 'Edit layout' : 'Set layout'}</button>
+      </div>
+      <div class="blocknote">
+        <input type="text" id="blockNoteInput" placeholder="Block note — e.g. stopped at lvl 9, start lvl 8"
+          value="${escAttr(blockNotes[currentBlock] || '')}" />
+      </div>
+      ${showLayoutForm ? layoutFormHtml(layout) : ''}
+    </div>
+
+    <div class="stats">
+      <span><b>${stats.total}</b> doors logged</span>
+      <span><b>${stats.spoke}</b> spoken to</span>
+      <span><b>${stats.keep}</b> keep in contact</span>
+      <span><b>${stats.revisit}</b> flagged revisit</span>
+    </div>
+
+    <div class="tabs">
+      <button class="${view==='table'?'on':''}" id="tabTable">Table</button>
+      <button class="${view==='list'?'on':''}" id="tabList">List</button>
+    </div>
+
+    ${view === 'table' ? tableViewHtml(currentBlock) : listViewHtml(currentBlock)}
+  `;
+
+  document.getElementById('navbar').innerHTML = `
+    <button class="ghost" id="exportCsvBtn">Export CSV</button>
+    <button class="ghost" id="exportJsonBtn">Export JSON</button>
+    <button class="ghost" id="importBtn">Import</button>
+    <input type="file" id="importFile" accept="application/json" />
+  `;
+
+  wireEvents();
+  renderSheet();
+}
+
+function layoutFormHtml(layout){
+  return `
+    <div class="card setupform" id="layoutForm" style="margin-top:8px;">
+      <label>Unit numbers per floor (comma separated)</label>
+      <input type="text" id="lf_suffixes" placeholder="e.g. 49,51,53,55,57,59" value="${escAttr((layout?.suffixes||[]).join(','))}" />
+      <div class="grid2">
+        <div><label>From floor</label><input type="number" id="lf_start" value="${layout?.floorStart ?? ''}" placeholder="1" /></div>
+        <div><label>To floor</label><input type="number" id="lf_end" value="${layout?.floorEnd ?? ''}" placeholder="16" /></div>
+      </div>
+      <p class="sub">This draws the whole block as a table, including doors you haven't reached yet. Existing logs outside a new range stay saved — switch to List view to see everything regardless of layout.</p>
+      <div class="btnrow">
+        <button class="primary" id="lf_save">Save layout</button>
+        <button class="ghost" id="lf_cancel">Cancel</button>
+      </div>
+    </div>
+  `;
+}
+
+function tableViewHtml(block){
+  const { floors, suffixes } = computeGrid(block);
+  if (floors.length === 0 || suffixes.length === 0) {
+    return `<div class="empty-block">No layout yet for this block.<br>Tap <b>Set layout</b> above to draw the grid — or switch to List view to add doors one at a time.</div>`;
+  }
+  return `
+    <div class="legend">
+      ${QUICK_STATUSES.concat(DETAIL_STATUSES).map(k => `<span><i class="st-${STATUS[k].cls}"></i>${STATUS[k].code} ${escHtml(STATUS[k].label)}</span>`).join('')}
+    </div>
+    <div class="gridwrap">
+      <table class="grid">
+        <thead><tr><th class="floorcol">Fl</th>${suffixes.map(s => `<th>${escHtml(s)}</th>`).join('')}</tr></thead>
+        <tbody>
+          ${floors.map(f => `
+            <tr>
+              <td class="floorcol">${escHtml(f)}</td>
+              ${suffixes.map(s => {
+                const unit = `${f}-${s}`;
+                const e = findEntry(block, unit);
+                const st = e && e.status ? STATUS[e.status] : null;
+                const initials = e?.name ? e.name.trim().slice(0,6) : '';
+                return `<td><button class="cell-btn ${st ? 'st-'+st.cls : 'empty'}" data-unit="${escAttr(unit)}">
+                    <span class="code">${st ? st.code : '·'}</span>
+                    ${initials ? `<span class="init">${escHtml(initials)}</span>` : ''}
+                  </button></td>`;
+              }).join('')}
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function listViewHtml(block){
+  const visible = entries
+    .filter(e => e.block === block)
+    .filter(e => {
+      if (!query.trim()) return true;
+      const q = query.trim().toLowerCase();
+      return e.unit.toLowerCase().includes(q) || e.name.toLowerCase().includes(q) || e.notes.toLowerCase().includes(q);
+    })
+    .sort((a,b) => b.unit.localeCompare(a.unit, undefined, {numeric:true}));
+  return `
+    <input type="text" id="searchInput" placeholder="Search unit, name, or notes…" value="${escAttr(query)}" style="margin-bottom:10px;" />
+    <div id="list">
+      ${visible.length === 0 ? '<p class="empty-block">No entries match.</p>' : visible.map(entryHtml).join('')}
+    </div>
+  `;
+}
+
+function entryHtml(e){
+  const st = e.status ? (STATUS[e.status] || { label: e.status, cls:'' }) : { label:'—', cls:'' };
+  return `
+    <div class="entry" data-unit="${escAttr(e.unit)}">
+      <div class="row">
+        <span class="unit mono">${escHtml(e.unit)}</span>
+        <span class="badge ${st.cls==='spoke'||st.cls==='contact'?'good':st.cls==='rental'?'blue':st.cls==='busy'||st.cls==='no_visit'?'warn':''}">${escHtml(st.label)}</span>
+      </div>
+      ${e.name ? `<div class="name">${escHtml(e.name)}${e.phone ? ' · ' + escHtml(e.phone) : ''}</div>` : (e.phone ? `<div class="name">${escHtml(e.phone)}</div>` : '')}
+      ${e.notes ? `<div class="notes">${escHtml(e.notes)}</div>` : ''}
+      <div class="meta">
+        <span>
+          ${e.keep_contact ? '<span class="badge good">keep in contact</span> ' : ''}
+          ${e.revisit ? '<span class="badge warn">revisit</span>' : ''}
+        </span>
+        <span class="actions"><button class="ghost openBtn">Open</button></span>
+      </div>
+    </div>
+  `;
+}
+
+function escHtml(s){ return String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function escAttr(s){ return escHtml(s).replace(/"/g, '&quot;'); }
+
+/* ---------- quick sheet ---------- */
+function openSheet(unit){
+  const existing = findEntry(currentBlock, unit);
+  sheetUnit = unit;
+  sheetDraft = existing ? { ...existing } : { status:'', name:'', phone:'', notes:'', keep_contact:false, revisit:false };
+  renderSheet();
+}
+function closeSheet(){ sheetUnit = null; sheetDraft = null; renderSheet(); }
+
+function renderSheet(){
+  const layer = document.getElementById('sheetLayer');
+  if (!sheetUnit) { layer.innerHTML = ''; return; }
+  const d = sheetDraft;
+  const exists = !!findEntry(currentBlock, sheetUnit);
+  layer.innerHTML = `
+    <div class="backdrop" id="sheetBackdrop"></div>
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <h3>Unit ${escHtml(sheetUnit)}</h3>
+      <p class="sub">Block ${escHtml(currentBlock)}${exists ? ' · editing existing log' : ''}</p>
+
+      <div class="quickrow">
+        <button class="quick-nothome" id="qNotHome">Not home</button>
+        <button class="quick-declined" id="qDeclined">Declined</button>
+      </div>
+
+      <div class="divider">or log detail</div>
+      <div class="chips" id="detailChips">
+        ${DETAIL_STATUSES.map(k => `<div class="chip ${d.status===k?'on':''}" data-status="${k}">${STATUS[k].label}</div>`).join('')}
+      </div>
+
+      <div class="chips" style="margin-top:10px;">
+        <div class="chip flag ${d.keep_contact?'on':''}" id="flagKeep">Keep in contact</div>
+        <div class="chip flag ${d.revisit?'on':''}" id="flagRevisit">Revisit</div>
+      </div>
+
+      <div class="grid2">
+        <div><label>Name</label><input type="text" id="s_name" placeholder="Optional" value="${escAttr(d.name)}" /></div>
+        <div><label>Phone</label><input type="tel" id="s_phone" placeholder="Optional" value="${escAttr(d.phone)}" /></div>
+      </div>
+      <label>Notes</label>
+      <textarea id="s_notes" placeholder="What happened at this door">${escHtml(d.notes)}</textarea>
+
+      <div class="btnrow">
+        <button class="primary" id="s_save" style="flex:1;">Save</button>
+        ${exists ? '<button class="danger" id="s_delete">Delete</button>' : ''}
+        <button class="ghost" id="s_cancel">Cancel</button>
+      </div>
+    </div>
+  `;
+
+  const $ = id => document.getElementById(id);
+  $('sheetBackdrop').addEventListener('click', closeSheet);
+
+  const quickSave = (statusKey) => {
+    upsertEntry(currentBlock, sheetUnit, {
+      status: statusKey,
+      name: $('s_name').value.trim(), phone: $('s_phone').value.trim(), notes: $('s_notes').value.trim(),
+      keep_contact: d.keep_contact, revisit: d.revisit,
+    });
+    toast(`Saved: ${STATUS[statusKey].label}`);
+    closeSheet(); render();
+  };
+  $('qNotHome').addEventListener('click', () => quickSave('not_home'));
+  $('qDeclined').addEventListener('click', () => quickSave('busy'));
+
+  document.querySelectorAll('#detailChips .chip').forEach(chip => {
+    chip.addEventListener('click', () => { d.status = chip.dataset.status; renderSheet(); });
+  });
+  $('flagKeep').addEventListener('click', () => { d.keep_contact = !d.keep_contact; renderSheet(); });
+  $('flagRevisit').addEventListener('click', () => { d.revisit = !d.revisit; renderSheet(); });
+
+  $('s_save').addEventListener('click', () => {
+    const status = d.status || (exists ? findEntry(currentBlock, sheetUnit).status : '');
+    upsertEntry(currentBlock, sheetUnit, {
+      status, name: $('s_name').value.trim(), phone: $('s_phone').value.trim(), notes: $('s_notes').value.trim(),
+      keep_contact: d.keep_contact, revisit: d.revisit,
+    });
+    toast('Saved');
+    closeSheet(); render();
+  });
+  $('s_delete')?.addEventListener('click', () => {
+    if (confirm(`Delete the log for unit ${sheetUnit}?`)) { deleteEntryByUnit(currentBlock, sheetUnit); closeSheet(); render(); }
+  });
+  $('s_cancel').addEventListener('click', closeSheet);
+}
+
+/* ---------- events ---------- */
+function wireEvents(){
+  const $ = id => document.getElementById(id);
+
+  $('blockSelect')?.addEventListener('change', e => {
+    currentBlock = e.target.value; localStorage.setItem(LS_LASTBLOCK, currentBlock);
+    showLayoutForm = false; render();
+  });
+  $('newBlockBtn').addEventListener('click', () => {
+    const v = prompt('New block number?');
+    if (!v || !v.trim()) return;
+    currentBlock = v.trim(); localStorage.setItem(LS_LASTBLOCK, currentBlock);
+    showLayoutForm = true; view = 'table'; render();
+  });
+  $('editLayoutBtn').addEventListener('click', () => { showLayoutForm = !showLayoutForm; render(); });
+
+  $('blockNoteInput')?.addEventListener('change', e => {
+    blockNotes[currentBlock] = e.target.value; save(LS_BLOCKNOTES, blockNotes);
+    toast('Block note saved');
+  });
+
+  $('lf_save')?.addEventListener('click', () => {
+    const suffixes = $('lf_suffixes').value.split(',').map(s => s.trim()).filter(Boolean);
+    const start = Number($('lf_start').value), end = Number($('lf_end').value);
+    if (!suffixes.length || !start || !end) { toast('Fill in unit numbers and both floors'); return; }
+    layouts[currentBlock] = { suffixes, floorStart: Math.min(start,end), floorEnd: Math.max(start,end) };
+    save(LS_LAYOUTS, layouts);
+    showLayoutForm = false; view = 'table'; render();
+    toast('Layout saved');
+  });
+  $('lf_cancel')?.addEventListener('click', () => { showLayoutForm = false; render(); });
+
+  $('tabTable').addEventListener('click', () => { view = 'table'; render(); });
+  $('tabList').addEventListener('click', () => { view = 'list'; render(); });
+
+  document.querySelectorAll('.cell-btn').forEach(btn => {
+    btn.addEventListener('click', () => openSheet(btn.dataset.unit));
+  });
+
+  let refocusSearch = false;
+  $('searchInput')?.addEventListener('input', e => { query = e.target.value; refocusSearch = true; render();
+    if (refocusSearch) { const s = document.getElementById('searchInput'); if (s) { s.focus(); s.selectionStart = s.selectionEnd = s.value.length; } }
+  });
+  document.querySelectorAll('.entry .openBtn').forEach(btn => {
+    btn.addEventListener('click', () => openSheet(btn.closest('.entry').dataset.unit));
+  });
+
+  $('exportCsvBtn').addEventListener('click', exportCsv);
+  $('exportJsonBtn').addEventListener('click', exportJson);
+  $('importBtn').addEventListener('click', () => $('importFile').click());
+  $('importFile').addEventListener('change', e => { if (e.target.files[0]) importJsonFile(e.target.files[0]); e.target.value=''; });
+}
+
+render();
+</script>
+</body>
+</html>
