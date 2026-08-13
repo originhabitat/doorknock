@@ -67,7 +67,7 @@
   .legend i.st-no_visit{background:var(--warn-soft);}
 
   /* ---- grid table ---- */
-  .gridwrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--card);}
+  .gridwrap{overflow:auto;max-height:62vh;border:1px solid var(--line);border-radius:var(--radius);background:var(--card);}
   table.grid{border-collapse:collapse;width:100%;}
   table.grid th, table.grid td{border:1px solid var(--line);text-align:center;padding:0;}
   table.grid th{background:var(--bg);font-size:0.75rem;color:var(--ink-soft);font-weight:600;padding:6px 4px;position:sticky;top:0;z-index:2;}
@@ -156,6 +156,7 @@ const LS_BLOCKNOTES = 'doorlog-blocknotes-v2';
 const LS_LAYOUTS = 'doorlog-layouts-v2';
 const LS_LASTBLOCK = 'doorlog-lastblock-v2';
 const LS_OLD_ENTRIES = 'doorlog-entries-v1'; // one-time migration from the previous version
+const APP_VERSION = 'v2.3';
 
 const STATUS = {
   not_home:{ label:'Not home',            code:'NH', cls:'not_home' },
@@ -360,7 +361,7 @@ function render(){
   };
 
   app.innerHTML = `
-    <h1>Door Log</h1>
+    <h1>Door Log <span class="sub" style="font-weight:400;">${APP_VERSION}</span></h1>
     <p class="sub">Saves on this device automatically. Export before switching phones or clearing browser data.</p>
 
     <div class="topbar">
@@ -646,11 +647,20 @@ function renderSheet(){
   $('qNotHome').addEventListener('click', () => quickSave('not_home'));
   $('qDeclined').addEventListener('click', () => quickSave('busy'));
 
+  // Direct DOM toggling, not a full renderSheet() — a re-render would rebuild the
+  // Name/Phone/Notes inputs from the (stale) sheetDraft object and wipe anything typed.
   document.querySelectorAll('#detailChips .chip').forEach(chip => {
-    chip.addEventListener('click', () => { d.status = chip.dataset.status; renderSheet(); });
+    chip.addEventListener('click', () => {
+      d.status = chip.dataset.status;
+      document.querySelectorAll('#detailChips .chip').forEach(c => c.classList.toggle('on', c.dataset.status === d.status));
+    });
   });
-  $('flagKeep').addEventListener('click', () => { d.keep_contact = !d.keep_contact; renderSheet(); });
-  $('flagRevisit').addEventListener('click', () => { d.revisit = !d.revisit; renderSheet(); });
+  $('flagKeep').addEventListener('click', () => {
+    d.keep_contact = !d.keep_contact; $('flagKeep').classList.toggle('on', d.keep_contact);
+  });
+  $('flagRevisit').addEventListener('click', () => {
+    d.revisit = !d.revisit; $('flagRevisit').classList.toggle('on', d.revisit);
+  });
 
   $('s_save').addEventListener('click', () => {
     const status = d.status || (exists ? existingEntry.status : '');
@@ -664,7 +674,10 @@ function renderSheet(){
   // Two-tap delete instead of window.confirm() — confirm() is a silent no-op in
   // iOS home-screen web apps, which was also the root cause of "New block" not working.
   $('s_delete')?.addEventListener('click', () => {
-    if (!sheetConfirmDelete) { sheetConfirmDelete = true; renderSheet(); return; }
+    if (!sheetConfirmDelete) {
+      d.name = $('s_name').value; d.phone = $('s_phone').value; d.notes = $('s_notes').value;
+      sheetConfirmDelete = true; renderSheet(); return;
+    }
     deleteEntryByUnit(currentBlock, sheetUnit); closeSheet(); render();
   });
   $('s_cancel').addEventListener('click', closeSheet);
