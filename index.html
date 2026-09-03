@@ -49,12 +49,36 @@
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 8px;}
   .btnrow{display:flex;gap:8px;margin-top:12px;}
 
-  .tabs{display:flex;gap:6px;margin-bottom:10px;}
-  .tabs button{flex:1;background:var(--card);}
+  .tabs{display:flex;gap:5px;margin-bottom:10px;}
+  .tabs button{flex:1;background:var(--card);font-size:0.78rem;padding:9px 2px;}
   .tabs button.on{background:var(--ink);border-color:var(--ink);color:#fff;font-weight:600;}
 
   .stats{display:flex;gap:14px;flex-wrap:wrap;font-size:0.8rem;color:var(--ink-soft);margin:0 0 10px;}
   .stats b{color:var(--ink);}
+
+  .barrow{display:grid;grid-template-columns:24px 1fr 28px;align-items:center;gap:8px;font-size:0.82rem;margin:6px 0;}
+  .bar{height:12px;border-radius:4px;min-width:3px;}
+  .bar.st-not_home{background:var(--ink-soft);}
+  .bar.st-busy{background:var(--warn);}
+  .bar.st-spoke{background:var(--good);}
+  .bar.st-contact{background:var(--accent);}
+  .bar.st-rental{background:var(--blue);}
+  .bar.st-no_visit{background:var(--warn);}
+
+  .calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-top:4px;}
+  .calhead{text-align:center;font-size:0.68rem;color:var(--ink-soft);font-weight:700;padding:2px 0;}
+  .calcell{aspect-ratio:1;border:1px solid var(--line);border-radius:8px;background:var(--card);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:0.72rem;cursor:pointer;padding:2px;gap:0;}
+  .calcell.empty{border:none;background:transparent;cursor:default;}
+  .calcell.has{background:var(--good-soft);border-color:var(--good);}
+  .calcell.today{outline:2px solid var(--accent);outline-offset:-2px;}
+  .calcell.selected{outline:2px solid var(--ink);outline-offset:-2px;}
+  .calnum{font-weight:600;}
+  .calcount{font-size:0.6rem;color:var(--good);font-weight:700;}
+
+  .dupgroup{border-color:var(--warn);}
+  .dupver{border-top:1px solid var(--line);padding:8px 0 6px;}
+  .dupver:first-of-type{border-top:none;padding-top:0;}
 
   .legend{display:flex;flex-wrap:wrap;gap:10px;font-size:0.72rem;color:var(--ink-soft);margin-bottom:8px;}
   .legend span{display:inline-flex;align-items:center;gap:4px;}
@@ -156,7 +180,7 @@ const LS_BLOCKNOTES = 'doorlog-blocknotes-v2';
 const LS_LAYOUTS = 'doorlog-layouts-v2';
 const LS_LASTBLOCK = 'doorlog-lastblock-v2';
 const LS_OLD_ENTRIES = 'doorlog-entries-v1'; // one-time migration from the previous version
-const APP_VERSION = 'v2.3';
+const APP_VERSION = 'v2.4';
 
 const STATUS = {
   not_home:{ label:'Not home',            code:'NH', cls:'not_home' },
@@ -194,10 +218,22 @@ function groupByDay(list){
   for (const e of list) { const k = dayKey(e.updated_ts || e.ts); (groups[k] = groups[k] || []).push(e); }
   return Object.keys(groups).sort((a,b) => b.localeCompare(a)).map(k => ({ label: dayLabel(k), items: groups[k] }));
 }
+function unitSortParts(unit){
+  const [f, s] = String(unit || '').split('-');
+  return [Number(f) || 0, s || ''];
+}
 function groupByBlock(list){
   const groups = {};
   for (const e of list) (groups[e.block] = groups[e.block] || []).push(e);
-  return Object.keys(groups).sort((a,b) => b.localeCompare(a, undefined, {numeric:true})).map(k => ({ label: 'Block ' + k, items: groups[k] }));
+  return Object.keys(groups).sort((a,b) => b.localeCompare(a, undefined, {numeric:true})).map(k => ({
+    label: 'Block ' + k,
+    // Walk order (floor descending, suffix ascending) rather than recency — this
+    // view doubles as a route-planning list for tomorrow's revisits.
+    items: groups[k].slice().sort((a,b) => {
+      const [fa,sa] = unitSortParts(a.unit), [fb,sb] = unitSortParts(b.unit);
+      return fb !== fa ? fb - fa : sa.localeCompare(sb, undefined, {numeric:true});
+    }),
+  }));
 }
 
 let entries = load(LS_ENTRIES, null);
@@ -220,9 +256,25 @@ save(LS_ENTRIES, entries);
 save(LS_BLOCKNOTES, blockNotes);
 save(LS_LAYOUTS, layouts);
 
+const LS_LASTEXPORT = 'doorlog-lastexport-v2'; // last time any export was taken — this tool has no other backup
+const LS_DUPIGNORE = 'doorlog-dupignore-v2';    // block+unit pairs explicitly marked "not a duplicate"
+function daysSinceIso(iso){ return iso ? Math.floor((Date.now() - new Date(iso).getTime()) / 86400000) : Infinity; }
+let dupIgnore = load(LS_DUPIGNORE, []);
+const dupKey = (block, unit) => block + '\u0001' + unit;
+// The only path that can create a same-door duplicate is JSON import: normal
+// logging always upserts by block+unit, but an imported entry from another
+// device carries its own id and gets appended even if that door is already logged here.
+function findDuplicateGroups(){
+  const byKey = {};
+  for (const e of entries) { const k = dupKey(e.block, e.unit); (byKey[k] = byKey[k] || []).push(e); }
+  return Object.entries(byKey).filter(([k,g]) => g.length > 1 && !dupIgnore.includes(k)).map(([,g]) => g);
+}
+
 let currentBlock = localStorage.getItem(LS_LASTBLOCK) || (entries[0] ? entries[0].block : (Object.keys(layouts)[0] || ''));
-let view = 'table'; // 'table' | 'list' | 'summary'
+let view = 'table'; // 'table' | 'list' | 'summary' | 'overview'
 let summaryGroupBy = 'day'; // 'day' | 'block' | 'all'
+let overviewMonth = null;       // 'YYYY-MM', lazily defaulted to the month of the most recent log
+let overviewSelectedDay = null; // 'YYYY-MM-DD' or null
 let query = '';
 let sheetUnit = null;    // { unit } currently open in the quick sheet, or null
 let sheetDraft = null;   // working copy of the entry being edited in the sheet
@@ -253,6 +305,7 @@ function download(filename, content, mime){
   URL.revokeObjectURL(a.href);
 }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
+function markExported(){ localStorage.setItem(LS_LASTEXPORT, new Date().toISOString()); }
 function exportCsv(){
   const cols = ['block','unit','status','status_label','name','phone','notes','keep_contact','revisit','logged_at','updated_at'];
   const lines = [cols.join(',')];
@@ -265,10 +318,12 @@ function exportCsv(){
     lines.push([block, '(BLOCK NOTE)', '', '', '', '', note, '', '', '', ''].map(csvEscape).join(','));
   }
   download(`doorlog-${todayStr()}.csv`, lines.join('\n'), 'text/csv');
+  markExported();
   toast('CSV exported');
 }
 function exportJson(){
   download(`doorlog-${todayStr()}.json`, JSON.stringify({ entries, blockNotes, layouts }, null, 2), 'application/json');
+  markExported();
   toast('JSON exported');
 }
 function readJsonFile(file){
@@ -280,9 +335,9 @@ function readJsonFile(file){
   });
 }
 // Stitches any number of exported JSON files together. Entries are de-duplicated
-// by their id, so re-importing the same export twice is safe. Note: entries logged
-// independently on two different devices for the SAME door will have different ids
-// and so will both be kept — review duplicates in List view if that happens.
+// by their id, so re-importing the same export twice is safe. A door logged
+// independently on two devices will have different ids and both get kept —
+// findDuplicateGroups() surfaces these on the Overview tab for you to resolve.
 async function importJsonFiles(fileList){
   const existingIds = new Set(entries.map(e => e.id));
   let added = 0, unreadable = 0;
@@ -296,7 +351,8 @@ async function importJsonFiles(fileList){
     layouts = { ...layouts, ...(data.layouts || {}) };
   }
   save(LS_ENTRIES, entries); save(LS_BLOCKNOTES, blockNotes); save(LS_LAYOUTS, layouts);
-  toast(`Imported ${added} new entr${added === 1 ? 'y' : 'ies'}${unreadable ? `, ${unreadable} file(s) unreadable` : ''}`);
+  const dupCount = findDuplicateGroups().length;
+  toast(`Imported ${added} new entr${added === 1 ? 'y' : 'ies'}${unreadable ? `, ${unreadable} file(s) unreadable` : ''}${dupCount ? ` · ${dupCount} possible duplicate${dupCount===1?'':'s'} — check Overview` : ''}`);
   render();
 }
 
@@ -392,9 +448,10 @@ function render(){
       <button class="${view==='table'?'on':''}" id="tabTable">Table</button>
       <button class="${view==='list'?'on':''}" id="tabList">List</button>
       <button class="${view==='summary'?'on':''}" id="tabSummary">Summary</button>
+      <button class="${view==='overview'?'on':''}" id="tabOverview">Overview</button>
     </div>
 
-    ${view === 'table' ? tableViewHtml(currentBlock) : view === 'list' ? listViewHtml(currentBlock) : summaryViewHtml()}
+    ${view === 'table' ? tableViewHtml(currentBlock) : view === 'list' ? listViewHtml(currentBlock) : view === 'summary' ? summaryViewHtml() : overviewViewHtml()}
   `;
 
   document.getElementById('navbar').innerHTML = `
@@ -530,6 +587,193 @@ function summaryEntryHtml(e){
         <span class="sub">${fmtTs(e.updated_ts || e.ts)}</span>
         <span class="actions"><button class="ghost openSummaryBtn">Open</button></span>
       </div>
+    </div>
+  `;
+}
+
+function duplicatesSectionHtml(){
+  const groups = findDuplicateGroups();
+  if (groups.length === 0) return '';
+  return `
+    <h2>Possible duplicates (${groups.length})</h2>
+    <p class="sub">Same door logged more than once — usually from stitching JSON files across devices. Pick which version to keep.</p>
+    ${groups.map(duplicateGroupHtml).join('')}
+  `;
+}
+function duplicateGroupHtml(group){
+  const block = group[0].block, unit = group[0].unit;
+  const sorted = group.slice().sort((a,b) => (b.updated_ts||b.ts||'').localeCompare(a.updated_ts||a.ts||''));
+  return `
+    <div class="card dupgroup">
+      <div class="row"><strong>Blk ${escHtml(block)} · ${escHtml(unit)}</strong><span class="sub">${sorted.length} versions</span></div>
+      ${sorted.map(e => {
+        const st = e.status ? (STATUS[e.status] || { label: e.status }) : { label: '—' };
+        return `
+          <div class="dupver">
+            <div class="row">
+              <span class="badge">${escHtml(st.label)}</span>
+              <span class="sub">${fmtTs(e.updated_ts || e.ts)}</span>
+            </div>
+            ${e.name ? `<div class="name">${escHtml(e.name)}${e.phone ? ' · ' + escHtml(e.phone) : ''}</div>` : ''}
+            ${e.notes ? `<div class="notes">${escHtml(e.notes)}</div>` : ''}
+            <button class="ghost small keepBtn" data-keepid="${escAttr(e.id)}" data-block="${escAttr(block)}" data-unit="${escAttr(unit)}">Keep this version</button>
+          </div>
+        `;
+      }).join('')}
+      <button class="ghost small ignoreDupBtn" data-block="${escAttr(block)}" data-unit="${escAttr(unit)}" style="margin-top:6px;">Not a duplicate — keep both</button>
+    </div>
+  `;
+}
+
+function overviewViewHtml(){
+  if (!overviewMonth) overviewMonth = defaultOverviewMonth();
+  const lastExport = localStorage.getItem(LS_LASTEXPORT);
+  const stale = entries.length > 0 && daysSinceIso(lastExport) >= 1;
+  return `
+    ${stale ? `
+      <div class="card row">
+        <span class="sub">${lastExport ? `Last backup ${fmtTs(lastExport)}` : 'No backup exported yet'} — this device is the only copy.</span>
+        <button class="ghost small" id="ov_exportNow">Export now</button>
+      </div>
+    ` : ''}
+    ${duplicatesSectionHtml()}
+    ${overviewStatsHtml()}
+    ${blockComparisonHtml()}
+    ${statusBreakdownHtml()}
+    <h2>Calendar — doors logged per day</h2>
+    ${calendarHtml(overviewMonth)}
+  `;
+}
+
+function defaultOverviewMonth(){
+  if (entries.length === 0) return SG_DAY_FMT.format(new Date()).slice(0,7);
+  const latest = entries.reduce((m,e) => { const t = e.updated_ts || e.ts || ''; return t > m ? t : m; }, '');
+  return dayKey(latest).slice(0,7);
+}
+
+function overviewStatsHtml(){
+  const total = entries.length;
+  const blocks = new Set(entries.map(e => e.block)).size;
+  const days = new Set(entries.map(e => dayKey(e.updated_ts || e.ts))).size;
+  const spoken = entries.filter(e => e.status === 'spoke' || e.status === 'contact').length;
+  const contacts = entries.filter(e => e.status === 'contact').length;
+  const keepers = entries.filter(e => e.keep_contact).length;
+  const revisits = entries.filter(e => e.revisit).length;
+  return `
+    <div class="stats">
+      <span><b>${total}</b> doors logged</span>
+      <span><b>${blocks}</b> block${blocks===1?'':'s'} worked</span>
+      <span><b>${days}</b> day${days===1?'':'s'} active</span>
+      <span><b>${spoken}</b> spoken to</span>
+      <span><b>${contacts}</b> contacts captured</span>
+      <span><b>${keepers}</b> keep in contact</span>
+      <span><b>${revisits}</b> flagged revisit</span>
+    </div>
+  `;
+}
+
+function blockComparisonHtml(){
+  const blocks = [...new Set(entries.map(e => e.block))].sort((a,b) => b.localeCompare(a, undefined, {numeric:true}));
+  if (blocks.length === 0) return '';
+  const rows = blocks.map(b => {
+    const es = entries.filter(e => e.block === b);
+    const total = es.length;
+    const spoken = es.filter(e => e.status === 'spoke' || e.status === 'contact').length;
+    const rate = total > 0 ? Math.round(spoken / total * 100) : 0;
+    const contacts = es.filter(e => e.status === 'contact').length;
+    const keepers = es.filter(e => e.keep_contact).length;
+    const revisits = es.filter(e => e.revisit).length;
+    return { b, total, rate, contacts, keepers, revisits };
+  });
+  return `
+    <h2>Block comparison</h2>
+    <div class="card stack">
+      ${rows.map(r => `
+        <div class="row" style="border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:2px;">
+          <span><strong>Blk ${escHtml(r.b)}</strong><br><span class="sub">${r.total} door${r.total===1?'':'s'}</span></span>
+          <span class="sub" style="text-align:right;">${r.rate}% spoken to<br>${r.contacts} contact${r.contacts===1?'':'s'} · ${r.keepers} keep · ${r.revisits} revisit</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function statusBreakdownHtml(){
+  const counts = {}; for (const k of Object.keys(STATUS)) counts[k] = 0;
+  for (const e of entries) if (e.status && counts[e.status] !== undefined) counts[e.status]++;
+  const max = Math.max(...Object.values(counts), 1);
+  return `
+    <h2>Status breakdown</h2>
+    <div class="card stack">
+      ${Object.keys(STATUS).map(k => `
+        <div class="barrow">
+          <span class="sub">${STATUS[k].code}</span>
+          <div class="bar st-${STATUS[k].cls}" style="width:${Math.max((counts[k]/max*100),2)}%;"></div>
+          <span class="mono" style="text-align:right;">${counts[k]}</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function monthGrid(ym){
+  const [y,m] = ym.split('-').map(Number);
+  const startWeekday = new Date(Date.UTC(y, m-1, 1)).getUTCDay();
+  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const cells = [];
+  for (let i=0;i<startWeekday;i++) cells.push(null);
+  for (let d=1; d<=daysInMonth; d++) cells.push(`${ym}-${pad2(d)}`);
+  while (cells.length % 7 !== 0) cells.push(null);
+  return cells;
+}
+function shiftMonth(ym, n){
+  const [y,m] = ym.split('-').map(Number);
+  const d = new Date(Date.UTC(y, m-1+n, 1));
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth()+1)}`;
+}
+function monthLabel(ym){
+  const [y,m] = ym.split('-').map(Number);
+  return new Date(Date.UTC(y, m-1, 1)).toLocaleDateString('en-SG', { month:'long', year:'numeric', timeZone:'UTC' });
+}
+function countsByDay(){
+  const counts = {};
+  for (const e of entries) { const k = dayKey(e.updated_ts || e.ts); counts[k] = (counts[k]||0) + 1; }
+  return counts;
+}
+function calendarHtml(ym){
+  const cells = monthGrid(ym);
+  const counts = countsByDay();
+  const todayKey = SG_DAY_FMT.format(new Date());
+  const weekdayLabels = ['S','M','T','W','T','F','S'];
+  return `
+    <div class="row" style="margin:6px 0 6px;">
+      <button class="ghost small" id="ov_prevMonth">‹</button>
+      <strong>${monthLabel(ym)}</strong>
+      <button class="ghost small" id="ov_nextMonth">›</button>
+    </div>
+    <div class="calgrid">
+      ${weekdayLabels.map(w => `<div class="calhead">${w}</div>`).join('')}
+      ${cells.map(k => {
+        if (!k) return `<div class="calcell empty"></div>`;
+        const n = counts[k] || 0;
+        const isToday = k === todayKey;
+        const isSelected = k === overviewSelectedDay;
+        return `<button class="calcell ${n>0?'has':''} ${isToday?'today':''} ${isSelected?'selected':''}" data-day="${k}">
+          <span class="calnum">${Number(k.slice(8,10))}</span>
+          ${n>0 ? `<span class="calcount">${n}</span>` : ''}
+        </button>`;
+      }).join('')}
+    </div>
+    ${overviewSelectedDay ? dayDetailHtml(overviewSelectedDay) : ''}
+  `;
+}
+function dayDetailHtml(dayStr){
+  const list = entries.filter(e => dayKey(e.updated_ts || e.ts) === dayStr)
+    .sort((a,b) => (b.updated_ts||b.ts||'').localeCompare(a.updated_ts||a.ts||''));
+  return `
+    <div class="card" style="margin-top:10px;">
+      <div class="row"><strong>${escHtml(dayLabel(dayStr))}</strong><button class="ghost small" id="ov_closeDay">Close</button></div>
+      ${list.length === 0 ? '<p class="sub">No doors logged this day.</p>' : list.map(summaryEntryHtml).join('')}
     </div>
   `;
 }
@@ -769,6 +1013,37 @@ function wireEvents(){
   $('tabTable').addEventListener('click', () => { view = 'table'; render(); });
   $('tabList').addEventListener('click', () => { view = 'list'; render(); });
   $('tabSummary').addEventListener('click', () => { view = 'summary'; render(); });
+  $('tabOverview').addEventListener('click', () => { view = 'overview'; render(); });
+
+  $('ov_exportNow')?.addEventListener('click', exportJson);
+  $('ov_prevMonth')?.addEventListener('click', () => { overviewMonth = shiftMonth(overviewMonth, -1); overviewSelectedDay = null; render(); });
+  $('ov_nextMonth')?.addEventListener('click', () => { overviewMonth = shiftMonth(overviewMonth, 1); overviewSelectedDay = null; render(); });
+  $('ov_closeDay')?.addEventListener('click', () => { overviewSelectedDay = null; render(); });
+
+  document.querySelectorAll('.keepBtn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const { keepid, block, unit } = btn.dataset;
+      entries = entries.filter(e => !(e.block === block && e.unit === unit) || e.id === keepid);
+      save(LS_ENTRIES, entries);
+      toast('Kept one version, removed the rest');
+      render();
+    });
+  });
+  document.querySelectorAll('.ignoreDupBtn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = dupKey(btn.dataset.block, btn.dataset.unit);
+      if (!dupIgnore.includes(key)) { dupIgnore.push(key); save(LS_DUPIGNORE, dupIgnore); }
+      toast('Marked as not a duplicate');
+      render();
+    });
+  });
+  document.querySelectorAll('.calcell[data-day]').forEach(cell => {
+    cell.addEventListener('click', () => {
+      const day = cell.dataset.day;
+      overviewSelectedDay = overviewSelectedDay === day ? null : day;
+      render();
+    });
+  });
 
   document.querySelectorAll('.cell-btn').forEach(btn => {
     btn.addEventListener('click', () => openSheet(btn.dataset.unit));
