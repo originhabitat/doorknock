@@ -56,6 +56,11 @@
   .stats{display:flex;gap:14px;flex-wrap:wrap;font-size:0.8rem;color:var(--ink-soft);margin:0 0 10px;}
   .stats b{color:var(--ink);}
 
+  .bigstats{display:flex;flex-wrap:wrap;gap:16px 20px;margin:6px 0 14px;}
+  .bigstat{display:flex;flex-direction:column;min-width:64px;}
+  .bigstat b{font-size:1.7rem;font-weight:800;line-height:1.1;color:var(--ink);}
+  .bigstat span{font-size:0.7rem;color:var(--ink-soft);text-transform:uppercase;letter-spacing:0.03em;margin-top:2px;}
+
   .barrow{display:grid;grid-template-columns:24px 1fr 28px;align-items:center;gap:8px;font-size:0.82rem;margin:6px 0;}
   .bar{height:12px;border-radius:4px;min-width:3px;}
   .bar.st-not_home{background:var(--ink-soft);}
@@ -180,7 +185,7 @@ const LS_BLOCKNOTES = 'doorlog-blocknotes-v2';
 const LS_LAYOUTS = 'doorlog-layouts-v2';
 const LS_LASTBLOCK = 'doorlog-lastblock-v2';
 const LS_OLD_ENTRIES = 'doorlog-entries-v1'; // one-time migration from the previous version
-const APP_VERSION = 'v2.4';
+const APP_VERSION = 'v2.5';
 
 const STATUS = {
   not_home:{ label:'Not home',            code:'NH', cls:'not_home' },
@@ -215,7 +220,9 @@ function dayLabel(key){
 }
 function groupByDay(list){
   const groups = {};
-  for (const e of list) { const k = dayKey(e.updated_ts || e.ts); (groups[k] = groups[k] || []).push(e); }
+  // Buckets by the door's original log date (ts), not when it was last edited —
+  // editing a note later shouldn't retroactively move the door to a different day.
+  for (const e of list) { const k = dayKey(e.ts); (groups[k] = groups[k] || []).push(e); }
   return Object.keys(groups).sort((a,b) => b.localeCompare(a)).map(k => ({ label: dayLabel(k), items: groups[k] }));
 }
 function unitSortParts(unit){
@@ -629,6 +636,10 @@ function overviewViewHtml(){
   if (!overviewMonth) overviewMonth = defaultOverviewMonth();
   const lastExport = localStorage.getItem(LS_LASTEXPORT);
   const stale = entries.length > 0 && daysSinceIso(lastExport) >= 1;
+  // Tapping a calendar day filters the headline numbers and status breakdown down
+  // to that day; block comparison always stays all-time since comparing blocks on
+  // a single day is rarely meaningful this early in a campaign.
+  const filtered = overviewSelectedDay ? entries.filter(e => dayKey(e.ts) === overviewSelectedDay) : entries;
   return `
     ${stale ? `
       <div class="card row">
@@ -637,37 +648,45 @@ function overviewViewHtml(){
       </div>
     ` : ''}
     ${duplicatesSectionHtml()}
-    ${overviewStatsHtml()}
-    ${blockComparisonHtml()}
-    ${statusBreakdownHtml()}
-    <h2>Calendar — doors logged per day</h2>
+    <h2>Status breakdown</h2>
+    ${statusBreakdownHtml(filtered)}
+    <h2>Calendar — tap a day to filter the figures below</h2>
     ${calendarHtml(overviewMonth)}
+    <div class="row" style="align-items:baseline;margin-top:12px;">
+      <h2 style="margin:0;">${overviewSelectedDay ? escHtml(dayLabel(overviewSelectedDay)) : 'All time'}</h2>
+      ${overviewSelectedDay ? `<button class="ghost small" id="ov_resetDay">Reset to all time</button>` : ''}
+    </div>
+    ${overviewStatsHtml(filtered, !!overviewSelectedDay)}
+    ${blockComparisonHtml()}
   `;
 }
 
 function defaultOverviewMonth(){
   if (entries.length === 0) return SG_DAY_FMT.format(new Date()).slice(0,7);
-  const latest = entries.reduce((m,e) => { const t = e.updated_ts || e.ts || ''; return t > m ? t : m; }, '');
+  const latest = entries.reduce((m,e) => (e.ts || '') > m ? (e.ts || '') : m, '');
   return dayKey(latest).slice(0,7);
 }
 
-function overviewStatsHtml(){
-  const total = entries.length;
-  const blocks = new Set(entries.map(e => e.block)).size;
-  const days = new Set(entries.map(e => dayKey(e.updated_ts || e.ts))).size;
-  const spoken = entries.filter(e => e.status === 'spoke' || e.status === 'contact').length;
-  const contacts = entries.filter(e => e.status === 'contact').length;
-  const keepers = entries.filter(e => e.keep_contact).length;
-  const revisits = entries.filter(e => e.revisit).length;
+function overviewStatsHtml(list, isFiltered){
+  const total = list.length;
+  const blocks = new Set(list.map(e => e.block)).size;
+  const days = new Set(list.map(e => dayKey(e.ts))).size;
+  const spoken = list.filter(e => e.status === 'spoke' || e.status === 'contact').length;
+  const contacts = list.filter(e => e.status === 'contact').length;
+  const keepers = list.filter(e => e.keep_contact).length;
+  const revisits = list.filter(e => e.revisit).length;
+  const cards = [
+    ['doors logged', total],
+    ['blocks worked', blocks],
+    ...(isFiltered ? [] : [['days active', days]]), // "days active" is always 1 when filtered to a single day
+    ['spoken to', spoken],
+    ['contacts captured', contacts],
+    ['keep in contact', keepers],
+    ['flagged revisit', revisits],
+  ];
   return `
-    <div class="stats">
-      <span><b>${total}</b> doors logged</span>
-      <span><b>${blocks}</b> block${blocks===1?'':'s'} worked</span>
-      <span><b>${days}</b> day${days===1?'':'s'} active</span>
-      <span><b>${spoken}</b> spoken to</span>
-      <span><b>${contacts}</b> contacts captured</span>
-      <span><b>${keepers}</b> keep in contact</span>
-      <span><b>${revisits}</b> flagged revisit</span>
+    <div class="bigstats">
+      ${cards.map(([label,val]) => `<div class="bigstat"><b>${val}</b><span>${escHtml(label)}</span></div>`).join('')}
     </div>
   `;
 }
@@ -686,7 +705,7 @@ function blockComparisonHtml(){
     return { b, total, rate, contacts, keepers, revisits };
   });
   return `
-    <h2>Block comparison</h2>
+    <h2>Block comparison (all time)</h2>
     <div class="card stack">
       ${rows.map(r => `
         <div class="row" style="border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:2px;">
@@ -698,12 +717,11 @@ function blockComparisonHtml(){
   `;
 }
 
-function statusBreakdownHtml(){
+function statusBreakdownHtml(list){
   const counts = {}; for (const k of Object.keys(STATUS)) counts[k] = 0;
-  for (const e of entries) if (e.status && counts[e.status] !== undefined) counts[e.status]++;
+  for (const e of list) if (e.status && counts[e.status] !== undefined) counts[e.status]++;
   const max = Math.max(...Object.values(counts), 1);
   return `
-    <h2>Status breakdown</h2>
     <div class="card stack">
       ${Object.keys(STATUS).map(k => `
         <div class="barrow">
@@ -737,7 +755,7 @@ function monthLabel(ym){
 }
 function countsByDay(){
   const counts = {};
-  for (const e of entries) { const k = dayKey(e.updated_ts || e.ts); counts[k] = (counts[k]||0) + 1; }
+  for (const e of entries) { const k = dayKey(e.ts); counts[k] = (counts[k]||0) + 1; }
   return counts;
 }
 function calendarHtml(ym){
@@ -768,7 +786,7 @@ function calendarHtml(ym){
   `;
 }
 function dayDetailHtml(dayStr){
-  const list = entries.filter(e => dayKey(e.updated_ts || e.ts) === dayStr)
+  const list = entries.filter(e => dayKey(e.ts) === dayStr)
     .sort((a,b) => (b.updated_ts||b.ts||'').localeCompare(a.updated_ts||a.ts||''));
   return `
     <div class="card" style="margin-top:10px;">
@@ -1019,6 +1037,7 @@ function wireEvents(){
   $('ov_prevMonth')?.addEventListener('click', () => { overviewMonth = shiftMonth(overviewMonth, -1); overviewSelectedDay = null; render(); });
   $('ov_nextMonth')?.addEventListener('click', () => { overviewMonth = shiftMonth(overviewMonth, 1); overviewSelectedDay = null; render(); });
   $('ov_closeDay')?.addEventListener('click', () => { overviewSelectedDay = null; render(); });
+  $('ov_resetDay')?.addEventListener('click', () => { overviewSelectedDay = null; render(); });
 
   document.querySelectorAll('.keepBtn').forEach(btn => {
     btn.addEventListener('click', () => {
